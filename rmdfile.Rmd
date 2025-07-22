@@ -1,0 +1,281 @@
+---
+title: "Curbside Database Statistical Analysis"
+author: "Tyler Campbell"
+date: "2025-07-21"
+output: 
+  pdf_document:
+    keep_tex: true
+    latex_engine: xelatex
+    includes:
+      in_header: null
+    toc: false
+    number_sections: false
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE)
+```
+
+# Introduction
+
+Welcome to my next project, a statistical analysis of my database using R! In this analysis, I will show basic visualizations and summary statistics of different entities in my database. I will also run a couple of regressions to test how different entities significantly impact each other. I hope that you enjoy!
+
+# Basic Visuals and Summary Stats
+
+```{r, include=FALSE}
+
+library(DBI)
+library(RMySQL)
+library(dplyr)
+library(ggplot2)
+library(broom)
+
+```
+
+```{r, results='hide', include=FALSE}
+con <- dbConnect(
+  RMySQL::MySQL(),
+  dbname = "heb_curbside",
+  host = "localhost",
+  port = 3306,
+  user = "root",
+  password = "Gobaylor#1"  
+)
+
+```
+
+```{r, results='hide'}
+orders <- dbReadTable(con, "`heb_curbside`.`order`")
+head(orders)
+order_revenue <- dbReadTable(con, "`heb_curbside`.`order_revenue`")
+labor <- dbReadTable(con, "`heb_curbside`.`labor`")
+survey <- dbReadTable(con, "`heb_curbside`.`customer_survey`")
+shopper_stats <- dbReadTable(con, "`heb_curbside`.`shopper_stats`")
+curbie_stats <- dbReadTable(con, "`heb_curbside`.`curbie_stats`")
+customer <- dbReadTable(con, "`heb_curbside`.`customer`")
+order_personal_shopper <- dbReadTable(con, "`heb_curbside`.`order_personal_shopper`")
+personal_shopper <- dbReadTable(con, "`heb_curbside`.`personal_shopper`")
+curbie <- dbReadTable(con, "`heb_curbside`.`curbie`")
+order_product <- dbReadTable(con, "`heb_curbside`.`order_product`")
+
+
+```
+
+```{r, results='hide'}
+str(orders)
+str(order_revenue)
+str(labor)
+str(survey)
+str(shopper_stats)
+str(curbie_stats)
+```
+
+```{r, results='hide'}
+orders_full <- orders %>%
+  left_join(order_revenue, by = "order_id") %>%
+  left_join(customer, by = "cust_id") %>%
+  left_join(order_personal_shopper, by = "order_id") %>%
+  left_join(personal_shopper, by = "shopper_id") %>%
+  left_join(curbie, by = "curbie_id") %>%
+  left_join(curbie_stats, by = "curbie_id") %>%
+  left_join(shopper_stats, by = "shopper_id") %>%
+  left_join(survey, by = "cust_id") %>%
+  left_join(labor, by = c("shopper_id", "curbie_id"))  
+
+
+
+```
+
+```{r, message=FALSE}
+# summary statistics for order revenue and wages
+
+library(knitr)
+library(dplyr)
+library(kableExtra)
+
+orders_full %>%
+  summarise(
+    avg_order_price = mean(order_price, na.rm = TRUE),
+    min_order_price = min(order_price, na.rm = TRUE),
+    max_order_price = max(order_price, na.rm = TRUE),
+    avg_wages = mean(wages, na.rm = TRUE),
+    total_labor_hours = sum(labor_hours, na.rm = TRUE)
+  ) %>%
+  kable(digits = 2, caption = "Summary Statistics from Orders Data") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = F, 
+                position = "center")
+
+
+```
+
+This is just some basic summary statistics. Everything seems prettu reasonable except for the min and max order prices. Realistically, there will be order prices that are more than 200 dollars and less than 15 dollars, but this is just synthetic data. 
+
+```{r}
+# order price distribution
+library(ggplot2)
+
+ggplot(order_revenue, aes(x = order_price)) +
+  geom_histogram(binwidth = 15, fill = "steelblue", color = "black") +
+  labs(
+    title = "Distribution of Order Prices",
+    x = "Order Price ($)",
+    y = "Number of Orders"
+  )
+
+```
+
+This is a bar graph of the price distribution. The majority of the orders are in the 25 and 60 dollar price range. This follows more of a uniform distribution and is not normally distributed. My intuition would think that it would either be more skewed to the right because less people probably purchase highly-priced orders.
+
+```{r}
+#weekly labor
+labor$week <- as.Date(labor$week)
+
+ggplot(labor, aes(x = week, y = labor_hours)) +
+  geom_boxplot(fill = "tomato") +
+  labs(
+    title = "Labor Hours per Week",
+    x = "Week",
+    y = "Hours Worked"
+  )
+
+```
+
+This is a boxplot that shows the number of hours worked by partners during different weeks. It stays the same throughout the year with the majority of hours worked being between 17 and 33 primarily. Is this realistic? Probably not because the number of hours worked might change during different times of the year. For example. At the H-E-B that I work at in Lubbock, a lot of the partners are college students, so they will go home during the summer which causes them to work less. 
+ 
+```{r}
+# Merge labor and order_revenue
+orders_with_week <- orders %>%
+  mutate(week = as.Date(cut(as.Date(order_date), "week"))) %>%
+  left_join(order_revenue, by = "order_id")
+
+revenue_by_week <- orders_with_week %>%
+  group_by(week) %>%
+  summarise(total_revenue = sum(order_price))
+
+labor_by_week <- labor %>%
+  group_by(week) %>%
+  summarise(total_labor_cost = sum(labor_hours * wages))
+
+profit_data <- left_join(revenue_by_week, labor_by_week, by = "week") %>%
+  mutate(profit = total_revenue - total_labor_cost)
+
+ggplot(profit_data, aes(x = week)) +
+  geom_line(aes(y = total_revenue), color = "darkgreen", size = 1.2) +
+  geom_line(aes(y = total_labor_cost), color = "red", size = 1.2) +
+  labs(
+    title = "Revenue vs Labor Cost Over Time",
+    x = "Week",
+    y = "Amount ($)"
+  )
+
+```
+
+This shows the comparison of labor and revenue over time. As you can see, this H-E-B is NOT doing too hot. This is obviously not realistic of what real data would show.
+
+```{r}
+ggplot(survey, aes(x = factor(one_to_five_rating))) +
+  geom_bar(fill = "skyblue", color = "black") +
+  labs(
+    title = "Distribution of Customer Ratings",
+    x = "Rating (1 = Worst, 5 = Best)",
+    y = "Number of Ratings"
+  )
+
+```
+
+This shows how many ratings each score got on the 1-5 survey. 4 has the most ratings while 5 has the least. This is probably not very realistic because this average will be close to 3, and it is typically closer to 5.
+
+# Linear Regressions
+
+In this section, I will be running regression analysis in order to test the correlation between two different entities and the strength of the models. There will be two tests that I will be running. The first test is whether or not number of items ordered affects the total revenue. The second test is whether or not the order revenue (or order size) generally affects the ratings that customers give on their surveys. Hope you enjoy!
+
+## order revenue vs number of items ordered
+
+```{r}
+
+# Summarize quantity per order
+order_items <- order_product %>%
+  group_by(order_id) %>%
+  summarise(total_items = sum(quantity))
+
+# Join with order revenue
+order_qty_rev <- order_items %>%
+  left_join(order_revenue, by = "order_id") %>%
+  filter(!is.na(order_price))
+
+
+
+```
+
+
+```{r}
+model1 <- lm(order_price ~ total_items, data = order_qty_rev)
+summary(model1)
+
+```
+
+Let's look at the summary statistics for this linear regression. The coefficient for the intercept is 99 which means that when 0 items are ordered, the model predicts a revenue of approximately 99. This provides little statistical significance, and it serves primarily as a baseline. The slope for the line is .45. This means that for every 1 item ordered, the model predicts an increase of about 45 cents in revenue which is a very small amount statistically.
+
+Moving on to the statistical significance section. The p-value of this test is .745. This means that there is very little significance between number of items ordered and order revenue. This means we fail to reject the null. The R-squared is .0007. This means that less than 1 percent of the variation in order revenue is explained by the number of items purchased There is not enough evidence to say that number of items ordered affects the revenue. This, however, seems contrary to my initial intuition. Because this is synthetic data and far from realistic, take this analysis with a grain of salt.
+
+```{r}
+ggplot(order_qty_rev, aes(x = total_items, y = order_price)) +
+  geom_point() +
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +
+  labs(title = "Order Revenue vs. Number of Items Ordered",
+       x = "Total Items Ordered",
+       y = "Order Revenue ($)")
+
+```
+
+Looking at this plot, the line is very flat with a very slight upwards path. This supports what I have previously said with that the revenue does not visibly increase with the number of items ordered. The slight upwards path might indicate there is barely any positive correlation, but it is definitely not enough. The data points are scattered all over the place vertically. This just helps reinforce the lack of correlation. 
+
+# Customer Rating vs Order Revenue
+
+```{r}
+# Create dataset with customer ratings and order revenue
+order_rating_rev <- survey %>%
+  left_join(orders, by = "cust_id") %>%
+  left_join(order_revenue, by = "order_id") %>%
+  select(order_id, cust_id, one_to_five_rating, order_price) %>%
+  filter(!is.na(one_to_five_rating), !is.na(order_price))
+
+```
+
+```{r}
+# Run the regression
+rating_model <- lm(order_price ~ one_to_five_rating, data = order_rating_rev)
+summary(rating_model)
+
+```
+
+Looking at the summary statistics for this next regression, the intercept is 95 which is the prediction of order revenue when the rating is 0. This is not significant since the survey is on a 1-5 scale. The rating slope is -.11 which means that as customer ratings increase, order revenue slightly decreases. However this is not statistically significant either. 
+
+The p-value is .97 which is way above .05. This means that we reject the null hypothesis. The rating does not have a significant affect on the revenue. The R-squared is essentially 0. This means that the ratings explain virtually 0% of the variation in order revenue. 
+
+```{r}
+# Scatterplot with regression line
+ggplot(order_rating_rev, aes(x = one_to_five_rating, y = order_price)) +
+  geom_point() +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(
+    title = "Order Revenue vs. Customer Rating",
+    x = "Customer Rating (1 to 5)",
+    y = "Order Revenue ($)"
+  )
+
+```
+
+The plot is the same as the previous regression that I did. The flat line and scattered plots further prove the lack of relation between survey ratings and order revenue. 
+
+# Conclusion 
+
+In conclusion, in this statistical analysis that I conducted on my H-E-B curbside database, I was able to visualize multiple different entity relationships, such as the distribution of order prices, the comparison of revenue and the number of labor hours among the workers. 
+
+Using synthetic data has skewed my intuition solely because of how unrealistic this data is. It is comical to see how poorly the store is doing when looking at revenue and labor costs. However, this has made the project more fun!
+
+Looking at the last portion, the linear regressions, this was the most boring part solely because there was not significant correlation between any of the regressions that I ran.
+
+All in all, I really enjoyed this project using R, and I hope you have gathered some valuable insights of my intuition!
